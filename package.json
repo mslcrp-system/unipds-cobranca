@@ -1,5 +1,5 @@
 {
-  "name": "temp_app",
+  "name": "unipds-cobranca",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
     "next": "16.2.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
