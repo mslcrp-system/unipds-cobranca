@@ -53,6 +53,8 @@ interface Caso {
   status_negociacao: string | null
   valor_negociado: number | null
   produto?: string
+  nome_produto?: string | null
+  classe?: string | null
 }
 
 interface Interacao {
@@ -574,6 +576,9 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
         <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
           <div>
             <div style={{ fontSize:22, fontWeight:800, color:C.text }}>{caso.nome}</div>
+            <div style={{ fontSize:13, color:C.muted, marginTop:2 }}>
+              Curso: {caso.nome_produto ? `${caso.nome_produto} (${caso.classe})` : "—"}
+            </div>
             <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>{caso.cpf_cnpj} · {caso.telefone} · {caso.email}</div>
           </div>
           <div style={{ display:"flex", gap:8 }}>
