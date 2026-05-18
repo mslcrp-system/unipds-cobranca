@@ -358,18 +358,27 @@ function Dashboard() {
 
   if (loading) return <Spinner />
 
-  const total_casos          = casos.length
+  // Deduplica por contrato: prefere a linha com registro CRM; mantém todos para volume e aging
+  const casosUnicos = Object.values(
+    casos.reduce((acc, c) => {
+      if (!acc[c.contract_id] || c.caso_id !== null) acc[c.contract_id] = c
+      return acc
+    }, {} as Record<string, Caso>)
+  )
+
+  const total_casos          = casosUnicos.length
   const volume_carteira      = casos.reduce((s,c) => s + c.valor_total_aberto, 0)
-  const casos_revertidos     = casos.filter(c => c.status === "pago").length
-  const volume_revertido     = casos.filter(c => c.status === "pago").reduce((s,c) => s + (c.valor_revertido ?? 0), 0)
-  const total_contatos       = casos.reduce((s,c) => s + c.total_contatos, 0)
-  const total_retornos       = casos.reduce((s,c) => s + c.total_retornos, 0)
+  const casos_revertidos     = casosUnicos.filter(c => c.status === "pago").length
+  const volume_revertido     = casosUnicos.filter(c => c.status === "pago").reduce((s,c) => s + (c.valor_revertido ?? 0), 0)
+  const total_contatos       = casosUnicos.reduce((s,c) => s + c.total_contatos, 0)
+  const total_retornos       = casosUnicos.reduce((s,c) => s + c.total_retornos, 0)
   const taxa_recuperacao_pct = volume_carteira > 0 ? Math.round(volume_revertido / volume_carteira * 100) : 0
   const taxa_retorno_pct     = total_contatos  > 0 ? Math.round(total_retornos  / total_contatos  * 100) : 0
-  const casos_em_aberto      = casos.filter(c => c.status === "em_aberto").length
-  const casos_em_contato     = casos.filter(c => c.status === "em_contato").length
-  const casos_em_negociacao  = casos.filter(c => c.status === "em_negociacao").length
-  const casos_extrajudicial  = casos.filter(c => c.status === "extrajudicial").length
+  const casos_em_aberto      = casosUnicos.filter(c => c.status === "em_aberto").length
+  const casos_em_contato     = casosUnicos.filter(c => c.status === "em_contato").length
+  const casos_em_negociacao  = casosUnicos.filter(c => c.status === "em_negociacao").length
+  const casos_acordo_ativo   = casosUnicos.filter(c => c.status === "acordo_ativo").length
+  const casos_extrajudicial  = casosUnicos.filter(c => c.status === "extrajudicial").length
 
   const agingData = [
     { label:"1–30 dias",  casos:casos.filter(c=>c.faixa_aging==="faixa_1").length, cor:C.green  },
@@ -378,7 +387,14 @@ function Dashboard() {
     { label:"+90 dias",   casos:casos.filter(c=>c.faixa_aging==="faixa_4").length, cor:C.red    },
   ]
   const maxAging = Math.max(...agingData.map(a=>a.casos), 1)
-  const top5     = [...casos].sort((a,b)=>b.valor_total_aberto-a.valor_total_aberto).slice(0,5)
+  // Agrega valor total real por contrato (somando todos os buckets) para o ranking
+  const top5 = Object.values(
+    casos.reduce((acc, c) => {
+      if (!acc[c.contract_id]) acc[c.contract_id] = { ...c, valor_total_aberto: 0 }
+      acc[c.contract_id].valor_total_aberto += c.valor_total_aberto
+      return acc
+    }, {} as Record<string, Caso>)
+  ).sort((a,b) => b.valor_total_aberto - a.valor_total_aberto).slice(0, 5)
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
@@ -402,12 +418,13 @@ function Dashboard() {
         ))}
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:14 }}>
         {[
           { label:"Em aberto",    val:casos_em_aberto,    cor:C.muted,  bg:"#f0f4f8"  },
           { label:"Em contato",   val:casos_em_contato,   cor:C.blue,   bg:C.blueBg   },
           { label:"Negociando",   val:casos_em_negociacao,cor:C.orange, bg:C.orangeBg },
-          { label:"Extrajudicial",val:casos_extrajudicial, cor:C.red,    bg:C.redBg    },
+          { label:"Acordo ativo", val:casos_acordo_ativo, cor:C.purple, bg:C.purpleBg },
+          { label:"Extrajudicial",val:casos_extrajudicial,cor:C.red,    bg:C.redBg    },
         ].map((k,i) => (
           <Card key={i} style={{ padding:"16px 20px", display:"flex", alignItems:"center", gap:14 }}>
             <div style={{ width:40, height:40, borderRadius:12, background:k.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -443,7 +460,7 @@ function Dashboard() {
           <SectionTitle>Maiores valores em aberto</SectionTitle>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
             {top5.map((c,i) => (
-              <div key={c.caso_id} style={{ display:"flex", alignItems:"center", gap:12 }}>
+              <div key={c.contract_id} style={{ display:"flex", alignItems:"center", gap:12 }}>
                 <div style={{ width:28, height:28, borderRadius:8, background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800, color:C.muted, flexShrink:0 }}>{i+1}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, color:C.text, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.nome}</div>
