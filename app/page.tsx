@@ -202,12 +202,36 @@ function useNegociacoes() {
 
   const fetch = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase
+
+    const { data: negData } = await supabase
       .from("cobranca_negociacoes")
-      .select(`*, cobranca_casos(contract_id, cobranca_casos_contracts:unipds.contracts(voomp_contrato_id), cobranca_casos_students:unipds.students(nome))`)
+      .select("*")
       .eq("status", "em_andamento")
-      .order("data_primeiro_vencimento", { ascending:true })
-    if (data) setNeg(data as unknown as Negociacao[])
+      .order("data_primeiro_vencimento", { ascending: true })
+
+    if (!negData?.length) {
+      setNeg([])
+      setLoading(false)
+      return
+    }
+
+    // Busca nome e voomp_contrato_id na view, filtrando pelos caso_ids
+    const casoIds = negData.map(n => n.caso_id)
+    const { data: casosData } = await supabase
+      .from("vw_casos_cobranca")
+      .select("caso_id, nome, voomp_contrato_id")
+      .in("caso_id", casoIds)
+
+    const casosMap = Object.fromEntries(
+      (casosData ?? []).map(c => [c.caso_id, c])
+    )
+
+    setNeg(negData.map(n => ({
+      ...n,
+      nome:              casosMap[n.caso_id]?.nome             ?? null,
+      voomp_contrato_id: casosMap[n.caso_id]?.voomp_contrato_id ?? null,
+    })) as Negociacao[])
+
     setLoading(false)
   }, [])
 
