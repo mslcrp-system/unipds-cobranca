@@ -40,7 +40,6 @@ interface Caso {
   data_ultima_interacao: string | null
   data_encerramento: string | null
   contract_id: string
-  contract_ref: string
   voomp_contrato_id: string | null
   status_contrato: string
   nome: string
@@ -80,7 +79,7 @@ interface Negociacao {
   status: string
   observacao: string | null
   nome?: string
-  contract_ref?: string
+  voomp_contrato_id?: string
 }
 
 interface Parcela {
@@ -93,24 +92,6 @@ interface Parcela {
 }
 
 type NegFormKey = "valor" | "entrada" | "parcelas"
-
-interface KPIs {
-  total_casos: number
-  casos_em_aberto: number
-  casos_em_contato: number
-  casos_em_negociacao: number
-  casos_revertidos: number
-  casos_extrajudicial: number
-  volume_carteira: number
-  volume_revertido: number
-  taxa_recuperacao_pct: number
-  total_contatos: number
-  total_retornos: number
-  taxa_retorno_pct: number
-  acordos_ativos: number
-  volume_em_acordo: number
-  volume_acordos_cumpridos: number
-}
 
 // ─── HELPERS ──────────────────────────────────────────────────
 const fmt     = (v?: number|null) => v != null ? v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}) : "—"
@@ -159,21 +140,6 @@ const Spinner = () => (
 )
 
 // ─── HOOKS DE DADOS ───────────────────────────────────────────
-function useKPIs() {
-  const [kpis, setKpis]       = useState<KPIs|null>(null)
-  const [loading, setLoading] = useState(true)
-
-  const fetch = useCallback(async () => {
-    setLoading(true)
-    const { data } = await supabase.from("v_kpis").select("*").single()
-    if (data) setKpis(data as KPIs)
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { fetch() }, [fetch])
-  return { kpis, loading, refresh: fetch }
-}
-
 function useCasos() {
   const [casos, setCasos]     = useState<Caso[]>([])
   const [loading, setLoading] = useState(true)
@@ -181,7 +147,8 @@ function useCasos() {
   const fetch = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase
-      .from("v_casos_completos")
+      .schema("cobranca")
+      .from("vw_casos_cobranca")
       .select("*")
       .order("faixa_aging", { ascending:false })
       .order("valor_total_aberto", { ascending:false })
@@ -218,6 +185,7 @@ function useInteracoes(casoId: string|null) {
     if (!casoId) return
     setLoading(true)
     const { data } = await supabase
+      .schema("cobranca")
       .from("cobranca_interacoes")
       .select("*")
       .eq("caso_id", casoId)
@@ -237,8 +205,9 @@ function useNegociacoes() {
   const fetch = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase
+      .schema("cobranca")
       .from("cobranca_negociacoes")
-      .select(`*, cobranca_casos(contract_id, cobranca_casos_contracts:unipds.contracts(contract_ref), cobranca_casos_students:unipds.students(nome))`)
+      .select(`*, cobranca_casos(contract_id, cobranca_casos_contracts:unipds.contracts(voomp_contrato_id), cobranca_casos_students:unipds.students(nome))`)
       .eq("status", "em_andamento")
       .order("data_primeiro_vencimento", { ascending:true })
     if (data) setNeg(data as unknown as Negociacao[])
@@ -259,7 +228,7 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
 
   const salvar = async () => {
     setSaving(true)
-    await supabase.from("cobranca_interacoes").insert({
+    await supabase.schema("cobranca").from("cobranca_interacoes").insert({
       caso_id:          caso.caso_id,
       canal,
       mensagem_enviada: mensagem,
@@ -267,9 +236,8 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
       observacao:       obs || null,
       operador:         "Operador",
     })
-    // Atualizar status do caso para em_contato se ainda em_aberto
     if (caso.status === "em_aberto") {
-      await supabase.from("cobranca_casos")
+      await supabase.schema("cobranca").from("cobranca_casos")
         .update({ status: "em_contato" })
         .eq("caso_id", caso.caso_id)
     }
@@ -282,7 +250,7 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
     <div style={{ position:"fixed", inset:0, background:"#00000055", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100 }}>
       <div style={{ background:C.card, borderRadius:20, padding:28, width:460, maxWidth:"90vw", boxShadow:shadowMd }}>
         <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>Registrar contato</div>
-        <div style={{ fontSize:12, color:C.muted, marginBottom:22 }}>{caso.nome} · {caso.contract_ref}</div>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:22 }}>{caso.nome} · {caso.voomp_contrato_id}</div>
 
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
           <div>
@@ -341,10 +309,22 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
 
 // ─── TELA 1: DASHBOARD ────────────────────────────────────────
 function Dashboard() {
-  const { kpis, loading } = useKPIs()
-  const { casos }         = useCasos()
+  const { casos, loading } = useCasos()
 
-  if (loading || !kpis) return <Spinner />
+  if (loading) return <Spinner />
+
+  const total_casos          = casos.length
+  const volume_carteira      = casos.reduce((s,c) => s + c.valor_total_aberto, 0)
+  const casos_revertidos     = casos.filter(c => c.status === "pago").length
+  const volume_revertido     = casos.filter(c => c.status === "pago").reduce((s,c) => s + (c.valor_revertido ?? 0), 0)
+  const total_contatos       = casos.reduce((s,c) => s + c.total_contatos, 0)
+  const total_retornos       = casos.reduce((s,c) => s + c.total_retornos, 0)
+  const taxa_recuperacao_pct = volume_carteira > 0 ? Math.round(volume_revertido / volume_carteira * 100) : 0
+  const taxa_retorno_pct     = total_contatos  > 0 ? Math.round(total_retornos  / total_contatos  * 100) : 0
+  const casos_em_aberto      = casos.filter(c => c.status === "em_aberto").length
+  const casos_em_contato     = casos.filter(c => c.status === "em_contato").length
+  const casos_em_negociacao  = casos.filter(c => c.status === "em_negociacao").length
+  const casos_extrajudicial  = casos.filter(c => c.status === "extrajudicial").length
 
   const agingData = [
     { label:"1–30 dias",  casos:casos.filter(c=>c.faixa_aging==="faixa_1").length, cor:C.green  },
@@ -364,10 +344,10 @@ function Dashboard() {
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14 }}>
         {[
-          { label:"Carteira total",   val:fmt(kpis.volume_carteira),    sub:`${kpis.total_casos} casos`, cor:C.blue,   bg:C.blueBg   },
-          { label:"Volume revertido", val:fmt(kpis.volume_revertido),   sub:`${kpis.casos_revertidos} clientes`, cor:C.green, bg:C.greenBg },
-          { label:"Taxa recuperação", val:`${kpis.taxa_recuperacao_pct??0}%`, sub:"do volume total", cor:C.orange, bg:C.orangeBg },
-          { label:"Taxa de retorno",  val:`${kpis.taxa_retorno_pct??0}%`, sub:`${kpis.total_retornos} de ${kpis.total_contatos}`, cor:C.purple, bg:C.purpleBg },
+          { label:"Carteira total",   val:fmt(volume_carteira),          sub:`${total_casos} casos`,                              cor:C.blue,   bg:C.blueBg   },
+          { label:"Volume revertido", val:fmt(volume_revertido),         sub:`${casos_revertidos} clientes`,                      cor:C.green,  bg:C.greenBg  },
+          { label:"Taxa recuperação", val:`${taxa_recuperacao_pct}%`,    sub:"do volume total",                                   cor:C.orange, bg:C.orangeBg },
+          { label:"Taxa de retorno",  val:`${taxa_retorno_pct}%`,        sub:`${total_retornos} de ${total_contatos}`,            cor:C.purple, bg:C.purpleBg },
         ].map((k,i) => (
           <div key={i} style={{ background:k.bg, borderRadius:16, padding:"20px 22px", boxShadow:shadow }}>
             <div style={{ fontSize:11, color:k.cor, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:10 }}>{k.label}</div>
@@ -379,10 +359,10 @@ function Dashboard() {
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14 }}>
         {[
-          { label:"Em aberto",    val:kpis.casos_em_aberto,    cor:C.muted,  bg:"#f0f4f8"  },
-          { label:"Em contato",   val:kpis.casos_em_contato,   cor:C.blue,   bg:C.blueBg   },
-          { label:"Negociando",   val:kpis.casos_em_negociacao,cor:C.orange, bg:C.orangeBg },
-          { label:"Extrajudicial",val:kpis.casos_extrajudicial, cor:C.red,    bg:C.redBg    },
+          { label:"Em aberto",    val:casos_em_aberto,    cor:C.muted,  bg:"#f0f4f8"  },
+          { label:"Em contato",   val:casos_em_contato,   cor:C.blue,   bg:C.blueBg   },
+          { label:"Negociando",   val:casos_em_negociacao,cor:C.orange, bg:C.orangeBg },
+          { label:"Extrajudicial",val:casos_extrajudicial, cor:C.red,    bg:C.redBg    },
         ].map((k,i) => (
           <Card key={i} style={{ padding:"16px 20px", display:"flex", alignItems:"center", gap:14 }}>
             <div style={{ width:40, height:40, borderRadius:12, background:k.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -422,7 +402,7 @@ function Dashboard() {
                 <div style={{ width:28, height:28, borderRadius:8, background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800, color:C.muted, flexShrink:0 }}>{i+1}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:13, color:C.text, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.nome}</div>
-                  <div style={{ fontSize:11, color:C.muted }}>{c.contract_ref} · {c.tenant_nome}</div>
+                  <div style={{ fontSize:11, color:C.muted }}>{c.voomp_contrato_id} · {c.tenant_nome}</div>
                 </div>
                 <div style={{ fontSize:14, fontWeight:800, color:C.text, whiteSpace:"nowrap" }}>{fmt(c.valor_total_aberto)}</div>
               </div>
@@ -490,7 +470,7 @@ function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
                     <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{c.tenant_nome} · {c.email}</div>
                   </td>
                   <td style={{ padding:"14px 16px" }}>
-                    <div style={{ fontSize:12, color:C.muted, fontFamily:"monospace" }}>{c.contract_ref}</div>
+                    <div style={{ fontSize:12, color:C.muted, fontFamily:"monospace" }}>{c.voomp_contrato_id}</div>
                   </td>
                   <td style={{ padding:"14px 16px", textAlign:"center" }}>
                     <Badge text={FAIXA_META[c.faixa_aging].label} cor={FAIXA_META[c.faixa_aging].cor} />
@@ -532,7 +512,7 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   const fecharPago = async () => {
     if (!valorRev) return
     setSaving(true)
-    await supabase.from("cobranca_casos").update({
+    await supabase.schema("cobranca").from("cobranca_casos").update({
       status:                  "pago",
       valor_revertido:         parseFloat(valorRev.replace(/[^0-9,.]/g,"").replace(",",".")),
       data_pagamento_revertido: new Date().toISOString().split("T")[0],
@@ -548,12 +528,12 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
     const valorTotal = parseFloat(negForm.valor.replace(/[^0-9,.]/g,"").replace(",","."))
     const entrada    = negForm.entrada ? parseFloat(negForm.entrada.replace(/[^0-9,.]/g,"").replace(",",".")) : null
     const parcelas   = negForm.parcelas ? parseInt(negForm.parcelas) : null
-    await supabase.from("cobranca_negociacoes").insert({
+    await supabase.schema("cobranca").from("cobranca_negociacoes").insert({
       caso_id: caso.caso_id, valor_total_acordado: valorTotal,
       valor_entrada: entrada, parcelas_acordadas: parcelas,
       valor_parcela_acordo: parcelas && entrada ? (valorTotal - entrada) / parcelas : null,
     })
-    await supabase.from("cobranca_casos")
+    await supabase.schema("cobranca").from("cobranca_casos")
       .update({ status:"acordo_ativo" }).eq("caso_id", caso.caso_id)
     setSaving(false)
     setShowNeg(false)
@@ -561,7 +541,7 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   }
 
   const enviarEscritorio = async () => {
-    await supabase.from("cobranca_casos")
+    await supabase.schema("cobranca").from("cobranca_casos")
       .update({ status:"extrajudicial" }).eq("caso_id", caso.caso_id)
     onRefresh()
     onVoltar()
@@ -590,7 +570,7 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14 }}>
         {[
-          { label:"Contrato",          val:caso.contract_ref,            cor:C.text, bg:C.bg     },
+          { label:"Contrato",          val:caso.voomp_contrato_id,       cor:C.text, bg:C.bg     },
           { label:"Tenant",            val:caso.tenant_nome,             cor:C.text, bg:C.bg     },
           { label:"Parcelas vencidas", val:String(caso.parcelas_vencidas), cor:C.red, bg:C.redBg },
           { label:"Valor em aberto",   val:fmt(caso.valor_total_aberto), cor:C.red,  bg:C.redBg  },
@@ -727,9 +707,9 @@ function Negociacoes() {
   const hoje = new Date()
 
   const marcarPago = async (neg: Negociacao) => {
-    await supabase.from("cobranca_negociacoes")
+    await supabase.schema("cobranca").from("cobranca_negociacoes")
       .update({ status:"cumprido" }).eq("negociacao_id", neg.negociacao_id)
-    await supabase.from("cobranca_casos")
+    await supabase.schema("cobranca").from("cobranca_casos")
       .update({ status:"pago", valor_revertido: neg.valor_total_acordado, data_pagamento_revertido: new Date().toISOString().split("T")[0] })
       .eq("caso_id", neg.caso_id)
     window.location.reload()
@@ -763,7 +743,7 @@ function Negociacoes() {
                       <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{n.nome ?? "—"}</div>
                     </td>
                     <td style={{ padding:"14px 16px" }}>
-                      <div style={{ fontSize:12, color:C.muted, fontFamily:"monospace" }}>{n.contract_ref ?? "—"}</div>
+                      <div style={{ fontSize:12, color:C.muted, fontFamily:"monospace" }}>{n.voomp_contrato_id ?? "—"}</div>
                     </td>
                     <td style={{ padding:"14px 16px", textAlign:"center", fontSize:14, fontWeight:800, color:C.text }}>{fmt(n.valor_total_acordado)}</td>
                     <td style={{ padding:"14px 16px", textAlign:"center", fontSize:13, color:C.muted }}>{fmt(n.valor_entrada)}</td>
