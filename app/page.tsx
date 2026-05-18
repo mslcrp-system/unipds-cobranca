@@ -147,7 +147,6 @@ function useCasos() {
   const fetch = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase
-      .schema("cobranca")
       .from("vw_casos_cobranca")
       .select("*")
       .order("faixa_aging", { ascending:false })
@@ -185,7 +184,6 @@ function useInteracoes(casoId: string|null) {
     if (!casoId) return
     setLoading(true)
     const { data } = await supabase
-      .schema("cobranca")
       .from("cobranca_interacoes")
       .select("*")
       .eq("caso_id", casoId)
@@ -205,7 +203,6 @@ function useNegociacoes() {
   const fetch = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase
-      .schema("cobranca")
       .from("cobranca_negociacoes")
       .select(`*, cobranca_casos(contract_id, cobranca_casos_contracts:unipds.contracts(voomp_contrato_id), cobranca_casos_students:unipds.students(nome))`)
       .eq("status", "em_andamento")
@@ -228,7 +225,7 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
 
   const salvar = async () => {
     setSaving(true)
-    await supabase.schema("cobranca").from("cobranca_interacoes").insert({
+    await supabase.from("cobranca_interacoes").insert({
       caso_id:          caso.caso_id,
       canal,
       mensagem_enviada: mensagem,
@@ -237,7 +234,7 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
       operador:         "Operador",
     })
     if (caso.status === "em_aberto") {
-      await supabase.schema("cobranca").from("cobranca_casos")
+      await supabase.from("cobranca_casos")
         .update({ status: "em_contato" })
         .eq("caso_id", caso.caso_id)
     }
@@ -516,7 +513,7 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   const fecharPago = async () => {
     if (!valorRev) return
     setSaving(true)
-    await supabase.schema("cobranca").from("cobranca_casos").update({
+    await supabase.from("cobranca_casos").update({
       status:                  "pago",
       valor_revertido:         parseFloat(valorRev.replace(/[^0-9,.]/g,"").replace(",",".")),
       data_pagamento_revertido: new Date().toISOString().split("T")[0],
@@ -532,12 +529,12 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
     const valorTotal = parseFloat(negForm.valor.replace(/[^0-9,.]/g,"").replace(",","."))
     const entrada    = negForm.entrada ? parseFloat(negForm.entrada.replace(/[^0-9,.]/g,"").replace(",",".")) : null
     const parcelas   = negForm.parcelas ? parseInt(negForm.parcelas) : null
-    await supabase.schema("cobranca").from("cobranca_negociacoes").insert({
+    await supabase.from("cobranca_negociacoes").insert({
       caso_id: caso.caso_id, valor_total_acordado: valorTotal,
       valor_entrada: entrada, parcelas_acordadas: parcelas,
       valor_parcela_acordo: parcelas && entrada ? (valorTotal - entrada) / parcelas : null,
     })
-    await supabase.schema("cobranca").from("cobranca_casos")
+    await supabase.from("cobranca_casos")
       .update({ status:"acordo_ativo" }).eq("caso_id", caso.caso_id)
     setSaving(false)
     setShowNeg(false)
@@ -545,7 +542,7 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   }
 
   const enviarEscritorio = async () => {
-    await supabase.schema("cobranca").from("cobranca_casos")
+    await supabase.from("cobranca_casos")
       .update({ status:"extrajudicial" }).eq("caso_id", caso.caso_id)
     onRefresh()
     onVoltar()
@@ -711,9 +708,9 @@ function Negociacoes() {
   const hoje = new Date()
 
   const marcarPago = async (neg: Negociacao) => {
-    await supabase.schema("cobranca").from("cobranca_negociacoes")
+    await supabase.from("cobranca_negociacoes")
       .update({ status:"cumprido" }).eq("negociacao_id", neg.negociacao_id)
-    await supabase.schema("cobranca").from("cobranca_casos")
+    await supabase.from("cobranca_casos")
       .update({ status:"pago", valor_revertido: neg.valor_total_acordado, data_pagamento_revertido: new Date().toISOString().split("T")[0] })
       .eq("caso_id", neg.caso_id)
     window.location.reload()
