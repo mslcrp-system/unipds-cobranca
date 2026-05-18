@@ -27,7 +27,7 @@ type StatusCaso = "em_aberto"|"em_contato"|"em_negociacao"|"acordo_ativo"|"pago"
 type FaixaAging = "faixa_1"|"faixa_2"|"faixa_3"|"faixa_4"
 
 interface Caso {
-  caso_id: string
+  caso_id: string | null
   tenant_id: string
   tenant_nome: string
   status: StatusCaso
@@ -225,19 +225,43 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
 
   const salvar = async () => {
     setSaving(true)
+
+    // Se ainda não existe caso CRM, cria agora antes do primeiro contato
+    let casoId = caso.caso_id
+    if (!casoId) {
+      const { data: novoCaso } = await supabase
+        .from("cobranca_casos")
+        .insert({
+          contract_id:       caso.contract_id,
+          tenant_id:         caso.tenant_id,
+          status:            "em_contato",
+          faixa_aging:       caso.faixa_aging,
+          valor_total_aberto: caso.valor_total_aberto,
+          parcelas_vencidas:  caso.parcelas_vencidas,
+        })
+        .select("caso_id")
+        .single()
+      casoId = novoCaso?.caso_id ?? null
+    }
+
+    if (!casoId) { setSaving(false); return }
+
     await supabase.from("cobranca_interacoes").insert({
-      caso_id:          caso.caso_id,
+      caso_id:          casoId,
       canal,
       mensagem_enviada: mensagem,
       houve_retorno:    retorno,
       observacao:       obs || null,
       operador:         "Operador",
     })
-    if (caso.status === "em_aberto") {
+
+    // Se o caso já existia e estava em_aberto, avança o status
+    if (caso.caso_id && caso.status === "em_aberto") {
       await supabase.from("cobranca_casos")
         .update({ status: "em_contato" })
-        .eq("caso_id", caso.caso_id)
+        .eq("caso_id", casoId)
     }
+
     setSaving(false)
     onSave()
     onClose()
@@ -465,7 +489,7 @@ function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
             </thead>
             <tbody>
               {filtrados.map((c) => (
-                <tr key={c.caso_id} style={{ borderBottom:`1px solid ${C.border}` }}>
+                <tr key={c.contract_id} style={{ borderBottom:`1px solid ${C.border}` }}>
                   <td style={{ padding:"14px 16px" }}>
                     <div style={{ fontSize:13, fontWeight:700, color:C.blue, cursor:"pointer" }} onClick={() => onAbrirFicha(c)}>{c.nome}</div>
                     <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{c.tenant_nome} · {c.email}</div>
@@ -510,14 +534,33 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   const [negForm,   setNegForm]   = useState<Record<NegFormKey, string>>({ valor:"", entrada:"", parcelas:"" })
   const [saving,    setSaving]    = useState(false)
 
+  // Retorna o caso_id existente ou cria um novo registro em cobranca_casos
+  const garantirCaso = async (): Promise<string | null> => {
+    if (caso.caso_id) return caso.caso_id
+    const { data } = await supabase
+      .from("cobranca_casos")
+      .insert({
+        contract_id:        caso.contract_id,
+        tenant_id:          caso.tenant_id,
+        status:             "em_aberto",
+        faixa_aging:        caso.faixa_aging,
+        valor_total_aberto: caso.valor_total_aberto,
+        parcelas_vencidas:  caso.parcelas_vencidas,
+      })
+      .select("caso_id")
+      .single()
+    return data?.caso_id ?? null
+  }
+
   const fecharPago = async () => {
     if (!valorRev) return
     setSaving(true)
+    const casoId = await garantirCaso()
+    if (!casoId) { setSaving(false); return }
     await supabase.from("cobranca_casos").update({
-      status:                  "pago",
-      valor_revertido:         parseFloat(valorRev.replace(/[^0-9,.]/g,"").replace(",",".")),
-      data_pagamento_revertido: new Date().toISOString().split("T")[0],
-    }).eq("caso_id", caso.caso_id)
+      status:          "pago",
+      valor_revertido: parseFloat(valorRev.replace(/[^0-9,.]/g,"").replace(",",".")),
+    }).eq("caso_id", casoId)
     setSaving(false)
     onRefresh()
     onVoltar()
@@ -526,24 +569,28 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   const salvarNegociacao = async () => {
     if (!negForm.valor) return
     setSaving(true)
+    const casoId = await garantirCaso()
+    if (!casoId) { setSaving(false); return }
     const valorTotal = parseFloat(negForm.valor.replace(/[^0-9,.]/g,"").replace(",","."))
     const entrada    = negForm.entrada ? parseFloat(negForm.entrada.replace(/[^0-9,.]/g,"").replace(",",".")) : null
     const parcelas   = negForm.parcelas ? parseInt(negForm.parcelas) : null
     await supabase.from("cobranca_negociacoes").insert({
-      caso_id: caso.caso_id, valor_total_acordado: valorTotal,
+      caso_id: casoId, valor_total_acordado: valorTotal,
       valor_entrada: entrada, parcelas_acordadas: parcelas,
       valor_parcela_acordo: parcelas && entrada ? (valorTotal - entrada) / parcelas : null,
     })
     await supabase.from("cobranca_casos")
-      .update({ status:"acordo_ativo" }).eq("caso_id", caso.caso_id)
+      .update({ status:"acordo_ativo" }).eq("caso_id", casoId)
     setSaving(false)
     setShowNeg(false)
     onRefresh()
   }
 
   const enviarEscritorio = async () => {
+    const casoId = await garantirCaso()
+    if (!casoId) return
     await supabase.from("cobranca_casos")
-      .update({ status:"extrajudicial" }).eq("caso_id", caso.caso_id)
+      .update({ status:"extrajudicial" }).eq("caso_id", casoId)
     onRefresh()
     onVoltar()
   }
