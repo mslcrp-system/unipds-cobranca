@@ -484,7 +484,18 @@ function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
   const [filtroTenant, setFiltroTenant] = useState("todos")
   const [modalCaso,    setModalCaso]    = useState<Caso|null>(null)
 
-  const filtrados = casos.filter(c =>
+  // Um contrato por aluno: mantém a faixa mais grave (ou a linha com registro CRM)
+  const faixaOrder: Record<string, number> = { faixa_1:1, faixa_2:2, faixa_3:3, faixa_4:4 }
+  const casosUnicos = Object.values(
+    casos.reduce((acc, c) => {
+      const ex = acc[c.contract_id]
+      if (!ex || c.caso_id !== null || faixaOrder[c.faixa_aging] > faixaOrder[ex.faixa_aging])
+        acc[c.contract_id] = c
+      return acc
+    }, {} as Record<string, Caso>)
+  )
+
+  const filtrados = casosUnicos.filter(c =>
     (filtroFaixa  === "todas" || c.faixa_aging === filtroFaixa) &&
     (filtroStatus === "todos" || c.status      === filtroStatus) &&
     (filtroTenant === "todos" || c.tenant_nome === filtroTenant)
