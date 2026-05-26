@@ -159,6 +159,45 @@ function useCasos() {
   return { casos, loading, refresh: fetch }
 }
 
+// Métricas históricas/acumuladas — vêm direto das tabelas-fonte, não da view,
+// porque casos pagos saem da vw_casos_cobranca quando seus boletos somem da inadimplência
+type HistoricoMetrics = {
+  casos_por_status: Record<string, number>
+  volume_revertido: number
+  total_contatos: number
+  total_retornos: number
+}
+
+function useHistorico() {
+  const [hist, setHist]       = useState<HistoricoMetrics>({ casos_por_status: {}, volume_revertido: 0, total_contatos: 0, total_retornos: 0 })
+  const [loading, setLoading] = useState(true)
+
+  const fetch = useCallback(async () => {
+    setLoading(true)
+    const [casosRes, interRes] = await Promise.all([
+      supabase.from("cobranca_casos").select("status, valor_revertido"),
+      supabase.from("cobranca_interacoes").select("houve_retorno"),
+    ])
+
+    const casos_por_status: Record<string, number> = {}
+    let volume_revertido = 0
+    for (const c of (casosRes.data ?? []) as { status: string, valor_revertido: number | null }[]) {
+      casos_por_status[c.status] = (casos_por_status[c.status] ?? 0) + 1
+      if (c.status === "pago") volume_revertido += c.valor_revertido ?? 0
+    }
+
+    const inter = (interRes.data ?? []) as { houve_retorno: boolean }[]
+    const total_contatos = inter.length
+    const total_retornos = inter.filter(i => i.houve_retorno).length
+
+    setHist({ casos_por_status, volume_revertido, total_contatos, total_retornos })
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { fetch() }, [fetch])
+  return { hist, loading, refresh: fetch }
+}
+
 function useParcelas(contractId: string|null) {
   const [parcelas, setParcelas] = useState<Parcela[]>([])
   const [loading, setLoading]   = useState(false)
@@ -355,8 +394,9 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
 // ─── TELA 1: DASHBOARD ────────────────────────────────────────
 function Dashboard() {
   const { casos, loading } = useCasos()
+  const { hist, loading: loadingHist } = useHistorico()
 
-  if (loading) return <Spinner />
+  if (loading || loadingHist) return <Spinner />
 
   // Deduplica por contrato: prefere a linha com registro CRM; mantém todos para volume e aging
   const casosUnicos = Object.values(
@@ -368,12 +408,14 @@ function Dashboard() {
 
   const total_casos          = casosUnicos.length
   const volume_carteira      = casos.reduce((s,c) => s + c.valor_total_aberto, 0)
-  const casos_revertidos     = casosUnicos.filter(c => c.status === "pago").length
-  const volume_revertido     = casosUnicos.filter(c => c.status === "pago").reduce((s,c) => s + (c.valor_revertido ?? 0), 0)
-  const total_contatos       = casosUnicos.reduce((s,c) => s + c.total_contatos, 0)
-  const total_retornos       = casosUnicos.reduce((s,c) => s + c.total_retornos, 0)
+  // Métricas históricas: da tabela cobranca_casos (inclui casos cujo boleto já foi pago e saiu da view)
+  const casos_revertidos     = hist.casos_por_status["pago"] ?? 0
+  const volume_revertido     = hist.volume_revertido
+  const total_contatos       = hist.total_contatos
+  const total_retornos       = hist.total_retornos
   const taxa_recuperacao_pct = volume_carteira > 0 ? Math.round(volume_revertido / volume_carteira * 100) : 0
   const taxa_retorno_pct     = total_contatos  > 0 ? Math.round(total_retornos  / total_contatos  * 100) : 0
+  // Status de cobrança ativa: da view (inclui contratos sem CRM que viram em_aberto por default)
   const casos_em_aberto      = casosUnicos.filter(c => c.status === "em_aberto").length
   const casos_em_contato     = casosUnicos.filter(c => c.status === "em_contato").length
   const casos_em_negociacao  = casosUnicos.filter(c => c.status === "em_negociacao").length
