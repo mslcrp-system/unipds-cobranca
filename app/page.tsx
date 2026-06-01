@@ -159,38 +159,63 @@ function useCasos() {
   return { casos, loading, refresh: fetch }
 }
 
-// Métricas históricas/acumuladas — vêm direto das tabelas-fonte, não da view,
-// porque casos pagos saem da vw_casos_cobranca quando seus boletos somem da inadimplência
+// Métricas históricas/acumuladas — volume revertido vem da vw_reversoes (régua híbrida:
+// pagamento_detectado quando há lastro no Voomp pós-contato, baixa_manual quando o time
+// trabalhou mas não há pagamento detectável). Contatos/retornos vêm direto da tabela.
 type HistoricoMetrics = {
   casos_por_status: Record<string, number>
   volume_revertido: number
+  volume_revertido_confirmado: number
+  volume_revertido_baixa_manual: number
+  casos_revertidos: number
   total_contatos: number
   total_retornos: number
 }
 
 function useHistorico() {
-  const [hist, setHist]       = useState<HistoricoMetrics>({ casos_por_status: {}, volume_revertido: 0, total_contatos: 0, total_retornos: 0 })
+  const [hist, setHist]       = useState<HistoricoMetrics>({
+    casos_por_status: {}, volume_revertido: 0, volume_revertido_confirmado: 0,
+    volume_revertido_baixa_manual: 0, casos_revertidos: 0, total_contatos: 0, total_retornos: 0,
+  })
   const [loading, setLoading] = useState(true)
 
   const fetch = useCallback(async () => {
     setLoading(true)
-    const [casosRes, interRes] = await Promise.all([
-      supabase.from("cobranca_casos").select("status, valor_revertido"),
+    const [casosRes, interRes, reversoesRes] = await Promise.all([
+      supabase.from("cobranca_casos").select("status"),
       supabase.from("cobranca_interacoes").select("houve_retorno"),
+      supabase.from("vw_reversoes").select("valor_revertido, origem_valor").eq("houve_reversao", true),
     ])
 
     const casos_por_status: Record<string, number> = {}
-    let volume_revertido = 0
-    for (const c of (casosRes.data ?? []) as { status: string, valor_revertido: number | null }[]) {
+    for (const c of (casosRes.data ?? []) as { status: string }[]) {
       casos_por_status[c.status] = (casos_por_status[c.status] ?? 0) + 1
-      if (c.status === "pago") volume_revertido += c.valor_revertido ?? 0
+    }
+
+    let volume_revertido = 0
+    let volume_revertido_confirmado = 0
+    let volume_revertido_baixa_manual = 0
+    const reversoes = (reversoesRes.data ?? []) as { valor_revertido: number, origem_valor: string }[]
+    for (const r of reversoes) {
+      const v = r.valor_revertido ?? 0
+      volume_revertido += v
+      if (r.origem_valor === "pagamento_detectado") volume_revertido_confirmado += v
+      else if (r.origem_valor === "baixa_manual")   volume_revertido_baixa_manual += v
     }
 
     const inter = (interRes.data ?? []) as { houve_retorno: boolean }[]
     const total_contatos = inter.length
     const total_retornos = inter.filter(i => i.houve_retorno).length
 
-    setHist({ casos_por_status, volume_revertido, total_contatos, total_retornos })
+    setHist({
+      casos_por_status,
+      volume_revertido,
+      volume_revertido_confirmado,
+      volume_revertido_baixa_manual,
+      casos_revertidos: reversoes.length,
+      total_contatos,
+      total_retornos,
+    })
     setLoading(false)
   }, [])
 
@@ -408,8 +433,8 @@ function Dashboard() {
 
   const total_casos          = casosUnicos.length
   const volume_carteira      = casos.reduce((s,c) => s + c.valor_total_aberto, 0)
-  // Métricas históricas: da tabela cobranca_casos (inclui casos cujo boleto já foi pago e saiu da view)
-  const casos_revertidos     = hist.casos_por_status["pago"] ?? 0
+  // Métricas históricas: vw_reversoes (régua híbrida — pagamento detectado + baixa manual)
+  const casos_revertidos     = hist.casos_revertidos
   const volume_revertido     = hist.volume_revertido
   const total_contatos       = hist.total_contatos
   const total_retornos       = hist.total_retornos
@@ -448,7 +473,7 @@ function Dashboard() {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14 }}>
         {[
           { label:"Carteira total",   val:fmt(volume_carteira),          sub:`${total_casos} casos`,                              cor:C.blue,   bg:C.blueBg   },
-          { label:"Volume revertido", val:fmt(volume_revertido),         sub:`${casos_revertidos} clientes`,                      cor:C.green,  bg:C.greenBg  },
+          { label:"Volume revertido", val:fmt(volume_revertido),         sub:`${casos_revertidos} clientes · ${fmt(hist.volume_revertido_confirmado)} confirmado · ${fmt(hist.volume_revertido_baixa_manual)} manual`, cor:C.green,  bg:C.greenBg  },
           { label:"Taxa recuperação", val:`${taxa_recuperacao_pct}%`,    sub:"do volume total",                                   cor:C.orange, bg:C.orangeBg },
           { label:"Taxa de retorno",  val:`${taxa_retorno_pct}%`,        sub:`${total_retornos} de ${total_contatos}`,            cor:C.purple, bg:C.purpleBg },
         ].map((k,i) => (
