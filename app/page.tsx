@@ -170,21 +170,26 @@ type HistoricoMetrics = {
   casos_revertidos: number
   total_contatos: number
   total_retornos: number
+  pct_inadimplencia: number
+  inadimplente: number
+  total_em_aberto: number
 }
 
 function useHistorico() {
   const [hist, setHist]       = useState<HistoricoMetrics>({
     casos_por_status: {}, volume_revertido: 0, volume_revertido_confirmado: 0,
     volume_revertido_baixa_manual: 0, casos_revertidos: 0, total_contatos: 0, total_retornos: 0,
+    pct_inadimplencia: 0, inadimplente: 0, total_em_aberto: 0,
   })
   const [loading, setLoading] = useState(true)
 
   const fetch = useCallback(async () => {
     setLoading(true)
-    const [casosRes, interRes, reversoesRes] = await Promise.all([
+    const [casosRes, interRes, reversoesRes, crRes] = await Promise.all([
       supabase.from("cobranca_casos").select("status"),
       supabase.from("cobranca_interacoes").select("houve_retorno"),
       supabase.from("vw_reversoes").select("valor_revertido, origem_valor").eq("houve_reversao", true),
+      supabaseRpc.rpc("get_cr_inadimplencia"),
     ])
 
     const casos_por_status: Record<string, number> = {}
@@ -207,6 +212,10 @@ function useHistorico() {
     const total_contatos = inter.length
     const total_retornos = inter.filter(i => i.houve_retorno).length
 
+    // RPC retorna 3 linhas (TOTAL + tenant_id por tenant). Card usa o consolidado (tenant_id IS NULL).
+    const crRows = (crRes.data ?? []) as Array<{ tenant_id: string | null, pct_inadimplencia: string, inadimplente: string, total_em_aberto: string }>
+    const consolidado = crRows.find(r => r.tenant_id === null)
+
     setHist({
       casos_por_status,
       volume_revertido,
@@ -215,6 +224,9 @@ function useHistorico() {
       casos_revertidos: reversoes.length,
       total_contatos,
       total_retornos,
+      pct_inadimplencia: consolidado ? parseFloat(consolidado.pct_inadimplencia) : 0,
+      inadimplente:     consolidado ? parseFloat(consolidado.inadimplente)      : 0,
+      total_em_aberto:  consolidado ? parseFloat(consolidado.total_em_aberto)   : 0,
     })
     setLoading(false)
   }, [])
@@ -438,7 +450,6 @@ function Dashboard() {
   const volume_revertido     = hist.volume_revertido
   const total_contatos       = hist.total_contatos
   const total_retornos       = hist.total_retornos
-  const taxa_recuperacao_pct = volume_carteira > 0 ? Math.round(volume_revertido / volume_carteira * 100) : 0
   const taxa_retorno_pct     = total_contatos  > 0 ? Math.round(total_retornos  / total_contatos  * 100) : 0
   // Status de cobrança ativa: da view (inclui contratos sem CRM que viram em_aberto por default)
   const casos_em_aberto      = casosUnicos.filter(c => c.status === "em_aberto").length
@@ -474,7 +485,7 @@ function Dashboard() {
         {[
           { label:"Carteira total",   val:fmt(volume_carteira),          sub:`${total_casos} casos`,                              cor:C.blue,   bg:C.blueBg   },
           { label:"Volume revertido", val:fmt(volume_revertido),         sub:`${casos_revertidos} clientes · ${fmt(hist.volume_revertido_confirmado)} confirmado · ${fmt(hist.volume_revertido_baixa_manual)} manual`, cor:C.green,  bg:C.greenBg  },
-          { label:"Taxa recuperação", val:`${taxa_recuperacao_pct}%`,    sub:"do volume total",                                   cor:C.orange, bg:C.orangeBg },
+          { label:"% Inadimplência",  val:`${hist.pct_inadimplencia.toFixed(2)}%`, sub:`${fmt(hist.inadimplente)} de ${fmt(hist.total_em_aberto)} · consolidado`, cor:C.orange, bg:C.orangeBg },
           { label:"Taxa de retorno",  val:`${taxa_retorno_pct}%`,        sub:`${total_retornos} de ${total_contatos}`,            cor:C.purple, bg:C.purpleBg },
         ].map((k,i) => (
           <div key={i} style={{ background:k.bg, borderRadius:16, padding:"20px 22px", boxShadow:shadow }}>
