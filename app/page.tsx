@@ -732,10 +732,13 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
   }
 
   const enviarEscritorio = async () => {
+    if (saving) return
+    setSaving(true)
     const casoId = await garantirCaso()
-    if (!casoId) return
+    if (!casoId) { setSaving(false); return }
     await supabase.from("cobranca_casos")
       .update({ status:"extrajudicial" }).eq("caso_id", casoId)
+    setSaving(false)
     onRefresh()
     onVoltar()
   }
@@ -785,9 +788,9 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
           style={{ padding:"10px 18px", background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:10, color:C.green, fontSize:13, fontWeight:700, cursor:"pointer" }}>
           Fechar como pago
         </button>
-        <button onClick={enviarEscritorio}
-          style={{ padding:"10px 18px", background:C.redBg, border:`1px solid ${C.red}44`, borderRadius:10, color:C.red, fontSize:13, fontWeight:700, cursor:"pointer" }}>
-          Enviar ao escritório
+        <button onClick={enviarEscritorio} disabled={saving}
+          style={{ padding:"10px 18px", background:saving?C.bg:C.redBg, border:`1px solid ${C.red}44`, borderRadius:10, color:saving?C.muted:C.red, fontSize:13, fontWeight:700, cursor:saving?"not-allowed":"pointer" }}>
+          {saving ? "Enviando..." : "Enviar ao escritório"}
         </button>
       </div>
 
