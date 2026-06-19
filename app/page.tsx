@@ -31,6 +31,8 @@ interface Caso {
   tenant_id: string
   tenant_nome: string
   status: StatusCaso
+  status_efetivo: StatusCaso
+  precisa_recontato: boolean
   faixa_aging: FaixaAging
   valor_total_aberto: number
   parcelas_vencidas: number
@@ -451,12 +453,13 @@ function Dashboard() {
   const total_contatos       = hist.total_contatos
   const total_retornos       = hist.total_retornos
   const taxa_retorno_pct     = total_contatos  > 0 ? Math.round(total_retornos  / total_contatos  * 100) : 0
-  // Status de cobrança ativa: da view (inclui contratos sem CRM que viram em_aberto por default)
-  const casos_em_aberto      = casosUnicos.filter(c => c.status === "em_aberto").length
-  const casos_em_contato     = casosUnicos.filter(c => c.status === "em_contato").length
-  const casos_em_negociacao  = casosUnicos.filter(c => c.status === "em_negociacao").length
-  const casos_acordo_ativo   = casosUnicos.filter(c => c.status === "acordo_ativo").length
-  const casos_extrajudicial  = casosUnicos.filter(c => c.status === "extrajudicial").length
+  // Status de cobrança ativa: usa status_efetivo (casos com nova parcela vencida pós-contato
+  // são repescados para em_aberto, mantendo o funil honesto do ciclo atual)
+  const casos_em_aberto      = casosUnicos.filter(c => c.status_efetivo === "em_aberto").length
+  const casos_em_contato     = casosUnicos.filter(c => c.status_efetivo === "em_contato").length
+  const casos_em_negociacao  = casosUnicos.filter(c => c.status_efetivo === "em_negociacao").length
+  const casos_acordo_ativo   = casosUnicos.filter(c => c.status_efetivo === "acordo_ativo").length
+  const casos_extrajudicial  = casosUnicos.filter(c => c.status_efetivo === "extrajudicial").length
 
   const agingData = [
     { label:"1–30 dias",  casos:casos.filter(c=>c.faixa_aging==="faixa_1").length, cor:C.green  },
@@ -580,10 +583,12 @@ function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
     }, {} as Record<string, Caso>)
   )
 
+  // Filtra pelo status_efetivo: casos repescados (precisa_recontato) aparecem em "em_aberto"
+  // mesmo quando o status original está em_contato — refletindo o ciclo atual de cobrança
   const filtrados = casosUnicos.filter(c =>
-    (filtroFaixa  === "todas" || c.faixa_aging === filtroFaixa) &&
-    (filtroStatus === "todos" || c.status      === filtroStatus) &&
-    (filtroTenant === "todos" || c.tenant_nome === filtroTenant)
+    (filtroFaixa  === "todas" || c.faixa_aging    === filtroFaixa) &&
+    (filtroStatus === "todos" || c.status_efetivo === filtroStatus) &&
+    (filtroTenant === "todos" || c.tenant_nome    === filtroTenant)
   )
 
   const FBtn = ({ val, cur, set, label }: { val: string; cur: string; set: (v: string) => void; label: string }) => (
@@ -643,7 +648,10 @@ function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
                     {c.data_ultimo_contato ? fmtDate(c.data_ultimo_contato) : "Sem contato"}
                   </td>
                   <td style={{ padding:"14px 16px", textAlign:"center" }}>
-                    <Badge text={STATUS_META[c.status].label} cor={STATUS_META[c.status].cor} bg={STATUS_META[c.status].bg} />
+                    <div style={{ display:"inline-flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                      <Badge text={STATUS_META[c.status_efetivo].label} cor={STATUS_META[c.status_efetivo].cor} bg={STATUS_META[c.status_efetivo].bg} />
+                      {c.precisa_recontato && <Badge text="🔔 Novo ciclo" cor={C.orange} bg={C.orangeBg} />}
+                    </div>
                   </td>
                   <td style={{ padding:"14px 16px", textAlign:"center" }}>
                     <button onClick={() => setModalCaso(c)}
@@ -746,9 +754,10 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
             </div>
             <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>{caso.cpf_cnpj} · {caso.telefone} · {caso.email}</div>
           </div>
-          <div style={{ display:"flex", gap:8 }}>
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
             <Badge text={FAIXA_META[caso.faixa_aging].label} cor={FAIXA_META[caso.faixa_aging].cor} />
-            <Badge text={STATUS_META[caso.status].label} cor={STATUS_META[caso.status].cor} bg={STATUS_META[caso.status].bg} />
+            <Badge text={STATUS_META[caso.status_efetivo].label} cor={STATUS_META[caso.status_efetivo].cor} bg={STATUS_META[caso.status_efetivo].bg} />
+            {caso.precisa_recontato && <Badge text="🔔 Novo ciclo" cor={C.orange} bg={C.orangeBg} />}
           </div>
         </div>
       </div>
