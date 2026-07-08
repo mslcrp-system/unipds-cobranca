@@ -611,7 +611,8 @@ function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
         {[
           ["todos","Todos"],
           ["UNIPDS POS GRADUACAO JAVA ELITE","Java"],
-          ["UNIPDS INTELIGENCIA ARTIFICIAL","IA"]
+          ["UNIPDS INTELIGENCIA ARTIFICIAL","IA"],
+          ["UNIPDS CIENCIA DE DADOS","Dados"],
         ].map(([v,l]) => <FBtn key={v} val={v} cur={filtroTenant} set={setFiltroTenant} label={l} />)}
         <div style={{ width:1, background:C.border }} />
         {[["todas","Todas"],["faixa_1","F1"],["faixa_2","F2"],["faixa_3","F3"],["faixa_4","F4"]].map(([v,l]) => <FBtn key={v} val={v} cur={filtroFaixa} set={setFiltroFaixa} label={l} />)}
