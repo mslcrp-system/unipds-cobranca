@@ -148,9 +148,12 @@ function useCasos() {
 
   const fetch = useCallback(async () => {
     setLoading(true)
+    // Só cobrança ativa: exclui encerrados (pago/baixado) — carteira, aging, funil e
+    // top5 refletem apenas contratos ainda em cobrança. Encerrados ficam para vista futura.
     const { data } = await supabase
       .from("vw_casos_cobranca")
       .select("*")
+      .not("status_efetivo", "in", '("pago","baixado")')
       .order("faixa_aging", { ascending:false })
       .order("valor_total_aberto", { ascending:false })
     if (data) setCasos(data as Caso[])
