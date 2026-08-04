@@ -434,10 +434,11 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
 }
 
 // ─── TELA 1: DASHBOARD ────────────────────────────────────────
-function Dashboard() {
-  const { casos, loading } = useCasos()
-  const { hist, loading: loadingHist } = useHistorico()
-
+// casos/hist vêm do CobrancaApp: um único par de hooks para o app inteiro, senão
+// cada tela instancia o seu e o refresh de uma não alcança o estado da outra.
+function Dashboard({ casos, loading, hist, loadingHist }: {
+  casos:Caso[], loading:boolean, hist:HistoricoMetrics, loadingHist:boolean
+}) {
   if (loading || loadingHist) return <Spinner />
 
   // Deduplica por contrato: prefere a linha com registro CRM; mantém todos para volume e aging
@@ -561,8 +562,9 @@ function Dashboard() {
 }
 
 // ─── TELA 2: LISTA DE CASOS ───────────────────────────────────
-function ListaCasos({ onAbrirFicha }: { onAbrirFicha:(c:Caso)=>void }) {
-  const { casos, loading, refresh } = useCasos()
+function ListaCasos({ onAbrirFicha, casos, loading, refresh }: {
+  onAbrirFicha:(c:Caso)=>void, casos:Caso[], loading:boolean, refresh:()=>void
+}) {
   const [filtroFaixa,  setFiltroFaixa]  = useState("todas")
   const [filtroStatus, setFiltroStatus] = useState("todos")
   const [filtroTenant, setFiltroTenant] = useState("todos")
@@ -706,11 +708,13 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
     setSaving(true)
     const casoId = await garantirCaso()
     if (!casoId) { setSaving(false); return }
-    await supabase.from("cobranca_casos").update({
-      status:          "pago",
-      valor_revertido: parseFloat(valorRev.replace(/[^0-9,.]/g,"").replace(",",".")),
+    const { error } = await supabase.from("cobranca_casos").update({
+      status:            "pago",
+      valor_revertido:   parseFloat(valorRev.replace(/[^0-9,.]/g,"").replace(",",".")),
+      data_encerramento: new Date().toISOString().split("T")[0],
     }).eq("caso_id", casoId)
     setSaving(false)
+    if (error) { alert(`Não foi possível dar baixa: ${error.message}`); return }
     onRefresh()
     onVoltar()
   }
@@ -903,17 +907,26 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
 }
 
 // ─── TELA 4: NEGOCIAÇÕES ──────────────────────────────────────
-function Negociacoes() {
-  const { negociacoes, loading } = useNegociacoes()
+function Negociacoes({ onRefresh }: { onRefresh:()=>void }) {
+  const { negociacoes, loading, refresh } = useNegociacoes()
   const hoje = new Date()
 
   const marcarPago = async (neg: Negociacao) => {
-    await supabase.from("cobranca_negociacoes")
+    const { error: errNeg } = await supabase.from("cobranca_negociacoes")
       .update({ status:"cumprido" }).eq("negociacao_id", neg.negociacao_id)
-    await supabase.from("cobranca_casos")
-      .update({ status:"pago", valor_revertido: neg.valor_total_acordado, data_pagamento_revertido: new Date().toISOString().split("T")[0] })
+    if (errNeg) { alert(`Não foi possível fechar a negociação: ${errNeg.message}`); return }
+    // Sem data_pagamento_revertido: a coluna não existe em cobranca_casos e o
+    // PostgREST rejeitava o update inteiro, deixando o caso preso em acordo_ativo.
+    const { error: errCaso } = await supabase.from("cobranca_casos")
+      .update({
+        status:            "pago",
+        valor_revertido:   neg.valor_total_acordado,
+        data_encerramento: new Date().toISOString().split("T")[0],
+      })
       .eq("caso_id", neg.caso_id)
-    window.location.reload()
+    if (errCaso) { alert(`Negociação fechada, mas o caso não foi baixado: ${errCaso.message}`); return }
+    refresh()
+    onRefresh()
   }
 
   return (
@@ -978,7 +991,13 @@ const NAV_ICONS: Record<string,string> = { dashboard:"◉", casos:"☰", negocia
 export default function CobrancaApp() {
   const [tela,  setTela]  = useState("dashboard")
   const [ficha, setFicha] = useState<Caso|null>(null)
-  const { refresh } = useCasos()
+  // Fonte única de casos/histórico para todas as telas. Antes cada tela chamava
+  // useCasos() por conta própria — três instâncias de estado independentes — e o
+  // refresh passado à ficha atualizava um array que nenhum componente renderizava,
+  // então baixa e reversão só apareciam depois de recarregar a página.
+  const { casos, loading, refresh: refreshCasos } = useCasos()
+  const { hist, loading: loadingHist, refresh: refreshHist } = useHistorico()
+  const refreshAll = useCallback(() => { refreshCasos(); refreshHist() }, [refreshCasos, refreshHist])
 
   const abrirFicha = (caso: Caso) => { setFicha(caso); setTela("ficha") }
   const telaAtiva  = tela === "ficha" ? "casos" : tela
@@ -1021,10 +1040,10 @@ export default function CobrancaApp() {
 
       {/* Conteúdo */}
       <div style={{ flex:1, padding:"28px 32px", overflowY:"auto", maxHeight:"100vh" }}>
-        {tela==="dashboard"   && <Dashboard />}
-        {tela==="casos"       && <ListaCasos onAbrirFicha={abrirFicha} />}
-        {tela==="ficha"       && ficha && <FichaAluno caso={ficha} onVoltar={() => setTela("casos")} onRefresh={refresh} />}
-        {tela==="negociacoes" && <Negociacoes />}
+        {tela==="dashboard"   && <Dashboard casos={casos} loading={loading} hist={hist} loadingHist={loadingHist} />}
+        {tela==="casos"       && <ListaCasos onAbrirFicha={abrirFicha} casos={casos} loading={loading} refresh={refreshAll} />}
+        {tela==="ficha"       && ficha && <FichaAluno caso={ficha} onVoltar={() => setTela("casos")} onRefresh={refreshAll} />}
+        {tela==="negociacoes" && <Negociacoes onRefresh={refreshAll} />}
       </div>
     </div>
   )
