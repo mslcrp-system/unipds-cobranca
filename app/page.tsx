@@ -25,6 +25,8 @@ const shadowMd = "0 4px 20px rgba(0,0,0,0.10)"
 // ─── TIPOS ────────────────────────────────────────────────────
 type StatusCaso = "em_aberto"|"em_contato"|"em_negociacao"|"acordo_ativo"|"pago"|"extrajudicial"|"baixado"
 type FaixaAging = "faixa_1"|"faixa_2"|"faixa_3"|"faixa_4"
+type DesfechoContato = "sem_resposta"|"promessa_pagamento"|"pediu_renegociacao"|"recusa_pagamento"|"dado_invalido"|"outros"
+type MotivoInadimplencia = "financeiro"|"boleto"|"corporativo"|"desistencia"|"outro"
 
 interface Caso {
   caso_id: string | null
@@ -56,6 +58,8 @@ interface Caso {
   produto?: string
   nome_produto?: string | null
   classe?: string | null
+  desfecho_ultimo_contato: DesfechoContato | null
+  motivo_ultimo_contato: MotivoInadimplencia | null
 }
 
 interface Interacao {
@@ -67,6 +71,8 @@ interface Interacao {
   houve_retorno: boolean
   observacao: string | null
   operador: string
+  desfecho_contato: DesfechoContato | null
+  motivo_inadimplencia: MotivoInadimplencia | null
 }
 
 interface Negociacao {
@@ -114,6 +120,23 @@ const FAIXA_META: Record<FaixaAging,{label:string,cor:string}> = {
   faixa_2: { label:"F2 · 31-60d", cor:C.orange },
   faixa_3: { label:"F3 · 61-90d", cor:C.pink   },
   faixa_4: { label:"F4 · +90d",   cor:C.red    },
+}
+
+const DESFECHO_META: Record<DesfechoContato,{label:string,cor:string,bg:string}> = {
+  promessa_pagamento: { label:"Promessa de pagamento", cor:C.orange, bg:C.orangeBg },
+  pediu_renegociacao: { label:"Pediu renegociação",    cor:C.purple, bg:C.purpleBg },
+  recusa_pagamento:   { label:"Recusou pagamento",     cor:C.red,    bg:C.redBg    },
+  dado_invalido:      { label:"Dado inválido",         cor:C.red,    bg:C.redBg    },
+  sem_resposta:       { label:"Sem resposta",          cor:C.muted,  bg:"#f0f4f8"  },
+  outros:             { label:"Outros",                cor:C.muted,  bg:"#f0f4f8"  },
+}
+
+const MOTIVO_META: Record<MotivoInadimplencia,{label:string,cor:string,bg:string}> = {
+  boleto:      { label:"Problema com boleto", cor:C.blue,   bg:C.blueBg   },
+  financeiro:  { label:"Financeiro",          cor:C.red,    bg:C.redBg    },
+  corporativo: { label:"Corporativo",         cor:C.pink,   bg:C.pinkBg   },
+  desistencia: { label:"Desistência",         cor:C.muted,  bg:"#f0f4f8"  },
+  outro:       { label:"Outro",               cor:C.muted,  bg:"#f0f4f8"  },
 }
 
 // ─── COMPONENTES BASE ─────────────────────────────────────────
@@ -321,12 +344,28 @@ function useNegociacoes() {
 }
 
 // ─── MODAL: REGISTRAR CONTATO ─────────────────────────────────
+// Opções de desfecho disponíveis conforme houve_retorno:
+// - sem retorno: apenas sem_resposta e dado_invalido (CHECK do banco bloqueia o resto)
+// - com retorno: todas exceto sem_resposta (CHECK cobranca_interacoes_retorno_coerente)
+const DESFECHO_OPCOES_SEM_RETORNO: DesfechoContato[] = ["sem_resposta", "dado_invalido"]
+const DESFECHO_OPCOES_COM_RETORNO: DesfechoContato[] = ["promessa_pagamento", "pediu_renegociacao", "recusa_pagamento", "dado_invalido", "outros"]
+
 function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, onSave:()=>void }) {
   const [canal,    setCanal]    = useState("whatsapp")
   const [mensagem, setMensagem] = useState("A")
   const [retorno,  setRetorno]  = useState(false)
   const [obs,      setObs]      = useState("")
+  const [desfecho, setDesfecho] = useState<DesfechoContato>("sem_resposta")
+  const [motivo,   setMotivo]   = useState<MotivoInadimplencia | "">("")
   const [saving,   setSaving]   = useState(false)
+
+  // Ao trocar retorno, reseta desfecho para default coerente com o CHECK do banco
+  const toggleRetorno = (v: boolean) => {
+    setRetorno(v)
+    setDesfecho(v ? "promessa_pagamento" : "sem_resposta")
+  }
+
+  const opcoesDesfecho = retorno ? DESFECHO_OPCOES_COM_RETORNO : DESFECHO_OPCOES_SEM_RETORNO
 
   const salvar = async () => {
     setSaving(true)
@@ -352,12 +391,14 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
     if (!casoId) { setSaving(false); return }
 
     await supabase.from("cobranca_interacoes").insert({
-      caso_id:          casoId,
+      caso_id:              casoId,
       canal,
-      mensagem_enviada: mensagem,
-      houve_retorno:    retorno,
-      observacao:       obs || null,
-      operador:         "Operador",
+      mensagem_enviada:     mensagem,
+      houve_retorno:        retorno,
+      observacao:           obs || null,
+      operador:             "Operador",
+      desfecho_contato:     desfecho,
+      motivo_inadimplencia: motivo || null,
     })
 
     // Se o caso já existia e estava em_aberto, avança o status
@@ -406,9 +447,30 @@ function ModalContato({ caso, onClose, onSave }: { caso:Caso, onClose:()=>void, 
           </div>
 
           <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 14px", background:C.greenBg, borderRadius:10 }}>
-            <input type="checkbox" id="ret" checked={retorno} onChange={e => setRetorno(e.target.checked)}
+            <input type="checkbox" id="ret" checked={retorno} onChange={e => toggleRetorno(e.target.checked)}
               style={{ width:16, height:16, accentColor:C.green }} />
             <label htmlFor="ret" style={{ fontSize:13, color:C.green, fontWeight:600, cursor:"pointer" }}>Houve retorno do aluno</label>
+          </div>
+
+          <div>
+            <label style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", display:"block", marginBottom:8 }}>Desfecho do contato</label>
+            <select value={desfecho} onChange={e => setDesfecho(e.target.value as DesfechoContato)}
+              style={{ width:"100%", padding:"10px 14px", background:C.bg, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:13 }}>
+              {opcoesDesfecho.map(v => (
+                <option key={v} value={v}>{DESFECHO_META[v].label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", display:"block", marginBottom:8 }}>Motivo da inadimplência <span style={{color:C.muted, fontWeight:500, textTransform:"none", letterSpacing:0}}>(se souber)</span></label>
+            <select value={motivo} onChange={e => setMotivo(e.target.value as MotivoInadimplencia | "")}
+              style={{ width:"100%", padding:"10px 14px", background:C.bg, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:13 }}>
+              <option value="">— não informado —</option>
+              {(Object.keys(MOTIVO_META) as MotivoInadimplencia[]).map(v => (
+                <option key={v} value={v}>{MOTIVO_META[v].label}</option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -565,10 +627,12 @@ function Dashboard({ casos, loading, hist, loadingHist }: {
 function ListaCasos({ onAbrirFicha, casos, loading, refresh }: {
   onAbrirFicha:(c:Caso)=>void, casos:Caso[], loading:boolean, refresh:()=>void
 }) {
-  const [filtroFaixa,  setFiltroFaixa]  = useState("todas")
-  const [filtroStatus, setFiltroStatus] = useState("todos")
-  const [filtroTenant, setFiltroTenant] = useState("todos")
-  const [modalCaso,    setModalCaso]    = useState<Caso|null>(null)
+  const [filtroFaixa,    setFiltroFaixa]    = useState("todas")
+  const [filtroStatus,   setFiltroStatus]   = useState("todos")
+  const [filtroTenant,   setFiltroTenant]   = useState("todos")
+  const [filtroDesfecho, setFiltroDesfecho] = useState("todos")
+  const [filtroMotivo,   setFiltroMotivo]   = useState("todos")
+  const [modalCaso,      setModalCaso]      = useState<Caso|null>(null)
 
   // Um contrato por aluno: usa a pior faixa como referência e soma parcelas/valor de todas as faixas
   const faixaOrder: Record<string, number> = { faixa_1:1, faixa_2:2, faixa_3:3, faixa_4:4 }
@@ -591,9 +655,11 @@ function ListaCasos({ onAbrirFicha, casos, loading, refresh }: {
   // Filtra pelo status_efetivo: casos repescados (precisa_recontato) aparecem em "em_aberto"
   // mesmo quando o status original está em_contato — refletindo o ciclo atual de cobrança
   const filtrados = casosUnicos.filter(c =>
-    (filtroFaixa  === "todas" || c.faixa_aging    === filtroFaixa) &&
-    (filtroStatus === "todos" || c.status_efetivo === filtroStatus) &&
-    (filtroTenant === "todos" || c.tenant_nome    === filtroTenant)
+    (filtroFaixa    === "todas" || c.faixa_aging             === filtroFaixa) &&
+    (filtroStatus   === "todos" || c.status_efetivo          === filtroStatus) &&
+    (filtroTenant   === "todos" || c.tenant_nome             === filtroTenant) &&
+    (filtroDesfecho === "todos" || c.desfecho_ultimo_contato === filtroDesfecho) &&
+    (filtroMotivo   === "todos" || c.motivo_ultimo_contato   === filtroMotivo)
   )
 
   const FBtn = ({ val, cur, set, label }: { val: string; cur: string; set: (v: string) => void; label: string }) => (
@@ -625,12 +691,33 @@ function ListaCasos({ onAbrirFicha, casos, loading, refresh }: {
         {[["todos","Todos"],["em_aberto","Aberto"],["em_contato","Contato"],["em_negociacao","Negoc."],["pago","Pago"]].map(([v,l]) => <FBtn key={v} val={v} cur={filtroStatus} set={setFiltroStatus} label={l} />)}
       </div>
 
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+        <span style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", marginRight:4 }}>Desfecho:</span>
+        {[
+          ["todos","Todos"],
+          ["promessa_pagamento","Promessa"],
+          ["pediu_renegociacao","Renegociação"],
+          ["recusa_pagamento","Recusa"],
+          ["dado_invalido","Dado inválido"],
+          ["sem_resposta","Sem resposta"],
+        ].map(([v,l]) => <FBtn key={v} val={v} cur={filtroDesfecho} set={setFiltroDesfecho} label={l} />)}
+        <div style={{ width:1, background:C.border }} />
+        <span style={{ fontSize:11, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", marginRight:4 }}>Motivo:</span>
+        {[
+          ["todos","Todos"],
+          ["boleto","Boleto"],
+          ["financeiro","Financeiro"],
+          ["corporativo","Corporativo"],
+          ["desistencia","Desistência"],
+        ].map(([v,l]) => <FBtn key={v} val={v} cur={filtroMotivo} set={setFiltroMotivo} label={l} />)}
+      </div>
+
       {loading ? <Spinner /> : (
         <Card style={{ padding:0, overflow:"hidden" }}>
           <table style={{ width:"100%", borderCollapse:"collapse" }}>
             <thead>
               <tr style={{ background:C.bg }}>
-                {["Aluno","Contrato","Faixa","Parcelas","Valor em aberto","Último contato","Status",""].map((h,i) => (
+                {["Aluno","Contrato","Faixa","Parcelas","Valor em aberto","Último contato","Desfecho","Status",""].map((h,i) => (
                   <th key={i} style={{ padding:"12px 16px", textAlign:i>=2?"center":"left", fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:"0.08em", fontWeight:700, borderBottom:`1px solid ${C.border}` }}>{h}</th>
                 ))}
               </tr>
@@ -652,6 +739,14 @@ function ListaCasos({ onAbrirFicha, casos, loading, refresh }: {
                   <td style={{ padding:"14px 16px", textAlign:"center", fontSize:14, fontWeight:800, color:C.text }}>{fmt(c.valor_total_aberto)}</td>
                   <td style={{ padding:"14px 16px", textAlign:"center", fontSize:12, color:c.data_ultimo_contato?C.muted:C.red }}>
                     {c.data_ultimo_contato ? fmtDate(c.data_ultimo_contato) : "Sem contato"}
+                  </td>
+                  <td style={{ padding:"14px 16px", textAlign:"center" }}>
+                    {c.desfecho_ultimo_contato ? (
+                      <div style={{ display:"inline-flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                        <Badge text={DESFECHO_META[c.desfecho_ultimo_contato].label} cor={DESFECHO_META[c.desfecho_ultimo_contato].cor} bg={DESFECHO_META[c.desfecho_ultimo_contato].bg} />
+                        {c.motivo_ultimo_contato && <span style={{ fontSize:10, color:MOTIVO_META[c.motivo_ultimo_contato].cor, fontWeight:600 }}>{MOTIVO_META[c.motivo_ultimo_contato].label}</span>}
+                      </div>
+                    ) : <span style={{ fontSize:11, color:C.muted }}>—</span>}
                   </td>
                   <td style={{ padding:"14px 16px", textAlign:"center" }}>
                     <div style={{ display:"inline-flex", flexDirection:"column", alignItems:"center", gap:4 }}>
@@ -896,6 +991,8 @@ function FichaAluno({ caso, onVoltar, onRefresh }: { caso:Caso, onVoltar:()=>voi
               <Badge text={it.canal==="whatsapp"?"WhatsApp":"Telefone"} cor={C.blue} bg={C.blueBg} />
               {it.mensagem_enviada && <Badge text={`Msg ${it.mensagem_enviada}`} cor={C.purple} bg={C.purpleBg} />}
               <Badge text={it.houve_retorno?"Retornou":"Sem retorno"} cor={it.houve_retorno?C.green:C.muted} bg={it.houve_retorno?C.greenBg:"#f0f4f8"} />
+              {it.desfecho_contato && <Badge text={DESFECHO_META[it.desfecho_contato].label} cor={DESFECHO_META[it.desfecho_contato].cor} bg={DESFECHO_META[it.desfecho_contato].bg} />}
+              {it.motivo_inadimplencia && <Badge text={MOTIVO_META[it.motivo_inadimplencia].label} cor={MOTIVO_META[it.motivo_inadimplencia].cor} bg={MOTIVO_META[it.motivo_inadimplencia].bg} />}
             </div>
             <div style={{ flex:1, fontSize:13, color:C.text }}>{it.observacao}</div>
             <div style={{ fontSize:12, color:C.muted, whiteSpace:"nowrap" }}>{it.operador}</div>
