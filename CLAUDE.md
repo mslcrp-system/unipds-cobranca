@@ -26,3 +26,14 @@ Não peça por conversa: o pedido escrito é o que explica, um ano depois, por q
 existe.
 
 A regra completa está em `unipds-banco/CLAUDE.md`.
+
+---
+
+## Como este repo se chama em cada lugar
+
+- No disco: `unipds-cobranca`
+- No GitHub: `mslcrp-system/unipds-cobranca`
+- No Vercel: `unipds-cobranca`
+
+Os nomes divergem entre as camadas em metade do grupo — o de-para completo está em
+`unipds-banco/CLAUDE.md`.
