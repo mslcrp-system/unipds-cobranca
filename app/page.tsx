@@ -173,12 +173,11 @@ function useCasos() {
     setLoading(true)
     // Só cobrança ativa: exclui encerrados (pago/baixado) — carteira, aging, funil e
     // top5 refletem apenas contratos ainda em cobrança. Encerrados ficam para vista futura.
-    const { data } = await supabase
-      .from("vw_casos_cobranca")
-      .select("*")
-      .not("status_efetivo", "in", '("pago","baixado")')
-      .order("faixa_aging", { ascending:false })
-      .order("valor_total_aberto", { ascending:false })
+    // A view tem PII (nome, CPF, e-mail, telefone) e por isso e lida no servidor,
+    // por /api/casos, que usa service_role. O filtro e a ordem sao os mesmos de sempre.
+    const res  = await globalThis.fetch("/api/casos", { cache: "no-store" })
+    const data = res.ok ? await res.json() : null
+    if (!res.ok) console.error("[useCasos] /api/casos falhou:", res.status)
     if (data) setCasos(data as Caso[])
     setLoading(false)
   }, [])
@@ -216,7 +215,8 @@ function useHistorico() {
     const [casosRes, interRes, reversoesRes, crRes] = await Promise.all([
       supabase.from("cobranca_casos").select("status"),
       supabase.from("cobranca_interacoes").select("houve_retorno"),
-      supabase.from("vw_reversoes").select("valor_revertido, origem_valor").eq("houve_reversao", true),
+      globalThis.fetch("/api/reversoes", { cache: "no-store" })
+        .then(async r => ({ data: r.ok ? await r.json() : null })),
       supabaseRpc.rpc("get_cr_inadimplencia"),
     ])
 
@@ -321,10 +321,9 @@ function useNegociacoes() {
 
     // Busca nome e voomp_contrato_id na view, filtrando pelos caso_ids
     const casoIds = negData.map(n => n.caso_id)
-    const { data: casosData } = await supabase
-      .from("vw_casos_cobranca")
-      .select("caso_id, nome, voomp_contrato_id")
-      .in("caso_id", casoIds)
+    const resCasos   = await globalThis.fetch(`/api/casos?ids=${encodeURIComponent(casoIds.join(","))}`, { cache: "no-store" })
+    const casosData  = resCasos.ok ? await resCasos.json() as { caso_id: string, nome: string|null, voomp_contrato_id: string|null }[] : null
+    if (!resCasos.ok) console.error("[useNegociacoes] /api/casos falhou:", resCasos.status)
 
     const casosMap = Object.fromEntries(
       (casosData ?? []).map(c => [c.caso_id, c])
